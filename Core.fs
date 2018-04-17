@@ -1,1 +1,0 @@
-type FilePath = string
