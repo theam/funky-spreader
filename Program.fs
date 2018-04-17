@@ -1,6 +1,10 @@
-﻿// Learn more about F# at http://fsharp.org
+﻿open System
+open System.IO.File
 
-open System
+open Consumer
+open Producer
+
+
 
 [<EntryPoint>]
 let main argv =
