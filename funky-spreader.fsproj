@@ -6,6 +6,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="LogDiff.fs" />
+    <Compile Include="Producer.fs" />
+    <Compile Include="BinLog.fs" />
     <Compile Include="Parser.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

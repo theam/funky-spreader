@@ -1,13 +1,16 @@
 ﻿open System
 open System.IO
 open System.Threading
-open System.Diagnostics
 
 open Kafunk
 open FSharpx.Choice
-
+open FSharpx.Option
 open FParsec
+
+open LogDiff
+open BinLog
 open Parser
+open Producer
 
 
 type State =
@@ -25,112 +28,72 @@ type Effect =
 type Event =
     | AppStarted
     | BinLogRead of string list
+    | AppErrored of string
     | MessageProduced
 
+type EventHandler  = State -> Event  -> (State * Effect)
 
-let diffChars (equals : seq<char>, differents : seq<char>) (x : char) (y : char) : (seq<char> * seq<char>) =
-    if x = y && y <> ' '
-    then ((Seq.singleton x)|> Seq.append equals , differents)
-    else (equals, (Seq.singleton y) |> Seq.append differents )
+type EffectHandler = State -> Effect -> (State * Event) option
 
 
-let diffLogs ( oldLog : string list ) ( newLog : string list) : string list =
-    newLog
-    |> Seq.skip oldLog.Length
-    |> Seq.toList
 
-
-let eventHandler state ev =
+let eventHandler ( state : State ) ( ev : Event ) : ( State * Effect ) =
     match ev with
     | AppStarted ->
         (state, ReadBinLog state.BinLogFile)
 
     | BinLogRead(newLog) ->
-        let diff = diffLogs state.OldLog newLog
+        let diff = LogDiff.diff state.OldLog newLog
         if diff.Length = 0
         then
-            printfn "Diff is empty"
             (state, NoOp)
         else
-            let newState = { state with OldLog = newLog }
-            (newState, PublishLog(diff))
+            ({ state with OldLog = newLog }, PublishLog(diff))
+
+    | AppErrored(errorMessage) ->
+        (state, NoOp)
 
     | MessageProduced ->
         (state, NoOp)
 
-let readBinLog filepath =
-    let proc = new Process()
-    let cmd  = "mysqlbinlog"
-    proc.StartInfo.UseShellExecute        <- false
-    proc.StartInfo.FileName               <- cmd
-    proc.StartInfo.Arguments              <- " -t --database=spreader " + filepath
-    proc.StartInfo.CreateNoWindow         <- true
-    proc.StartInfo.RedirectStandardOutput <- true
-    proc.Start() |> ignore
-    proc.StandardOutput.ReadToEnd()
 
-
-let effectHandler state ev =
-    match ev with
-    | ReadBinLog(filepath) -> choose {
-        // let! content = protect File.ReadAllText filepath
-        let! content = protect readBinLog filepath
+let effectHandler ( state : State ) ( eff : Effect ) : ( State * Event ) option =
+    match eff with
+    | ReadBinLog(filepath) -> maybe {
+        let content = BinLog.read filepath
         match BinLog.parse content with
         | Failure(s, err, _) ->
-            printfn "Parse error: %s" (err.ToString())
-            return (BinLogRead [""])
+            return (state, AppErrored (err.ToString()) )
         | Success(res, _, _) ->
-            return (BinLogRead res)
+            return (state, BinLogRead res )
         }
 
-    | PublishLog(msgs) -> choose {
-        // let kafkaMessage = ProducerMessage.ofString (msg)
-        // Producer.produce state.KafkaProducer kafkaMessage |> ignore
-        msgs
-        |> Seq.iter (printfn "===============> Producing diff: %s")
-        return MessageProduced
+    | PublishLog(msgs) -> maybe {
+        msgs |> Seq.iter (SpreaderProducer.produce state.KafkaProducer)
+        return (state, MessageProduced )
         }
 
-    | _ -> Choice2Of2 (Exception("Panic: This shouldn't have happened"))
+    | _ -> None
 
 
-
-let rec runApp evHandler effHandler state ev =
-    match ev with
-    | Choice2Of2 _ ->
-        state
-
-    | Choice1Of2 other ->
-        let (newState, eff) = evHandler state other
-        let next            = effHandler newState eff
-        runApp evHandler effHandler newState next
+let rec runApp ( evHandler : EventHandler ) ( effHandler : EffectHandler ) ( state: State ) ( ev : Event ) : State =
+    evHandler state ev
+    ||> effHandler
+    |>  Option.map (fun (s, e) -> runApp evHandler effHandler s e)
+    |>  getOrElse state
 
 
 let rec loopApp evHandler effHandler state =
-    let newState = runApp evHandler effHandler state ( Choice1Of2 AppStarted )
-    "Waiting..............\n" |> Seq.iter (fun c -> printf "%c" c; Thread.Sleep 100)
-    loopApp evHandler effHandler newState
-
-
+    runApp evHandler effHandler state AppStarted
+    |> loopApp evHandler effHandler
 
 
 [<EntryPoint>]
 let main argv =
-    let connection = Kafka.connHost "localhost"
-
-    let producerConfig =
-        ProducerConfig.create (
-            topic = "spreader",
-            partition = Partitioner.roundRobin)
-
-    let producer =
-        Producer.createAsync connection producerConfig
-        |> Async.RunSynchronously
-
     let initialState =
         { BinLogFile    = "/var/lib/mysql/mysql-bin.000009";
           OldLog        = [""];
-          KafkaProducer = producer; }
+          KafkaProducer = SpreaderProducer.create; }
 
     loopApp eventHandler effectHandler initialState
     0
