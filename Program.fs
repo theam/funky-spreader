@@ -1,9 +1,13 @@
 ﻿open System
 open System.IO
 open System.Threading
+open System.Diagnostics
 
 open Kafunk
 open FSharpx.Choice
+
+open FParsec
+open Parser
 
 
 type State =
@@ -25,7 +29,7 @@ type Event =
 
 
 let diffChars (equals : seq<char>, differents : seq<char>) (x : char) (y : char) : (seq<char> * seq<char>) =
-    if x = y
+    if x = y && y <> ' '
     then ((Seq.singleton x)|> Seq.append equals , differents)
     else (equals, (Seq.singleton y) |> Seq.append differents )
 
@@ -44,43 +48,69 @@ let eventHandler state ev =
 
     | BinLogRead(newLog) ->
         let diff = diffLogs state.OldLog newLog
-        if diff = ""
+        if diff.Trim() = ""
         then
+            printfn "Diff is empty"
             (state, NoOp)
         else
-            ({ state with OldLog = diff }, PublishLog(diff))
+            let newState = { state with OldLog = diff }
+            (newState, PublishLog(diff))
 
     | MessageProduced ->
         (state, NoOp)
+
+let readBinLog filepath =
+    let proc = new Process()
+    let cmd  = "mysqlbinlog"
+    proc.StartInfo.UseShellExecute        <- false
+    proc.StartInfo.FileName               <- cmd
+    proc.StartInfo.Arguments              <- " -t --database=spreader " + filepath
+    proc.StartInfo.CreateNoWindow         <- true
+    proc.StartInfo.RedirectStandardOutput <- true
+    proc.Start() |> ignore
+    proc.StandardOutput.ReadToEnd()
 
 
 let effectHandler state ev =
     match ev with
     | ReadBinLog(filepath) -> choose {
-        let! content = protect File.ReadAllText filepath
-        return (BinLogRead content)
+        // let! content = protect File.ReadAllText filepath
+        let! content = protect readBinLog filepath
+        match BinLog.parse content with
+        | Failure(s, err, _) ->
+            printfn "Parse error: %s" (err.ToString())
+            return (BinLogRead "")
+        | Success(res, _, _) ->
+            return (BinLogRead (res.ToString()))
         }
 
     | PublishLog(msg) -> choose {
         let kafkaMessage = ProducerMessage.ofString (msg)
         // Producer.produce state.KafkaProducer kafkaMessage |> ignore
-        printfn "%s" msg
+        printfn "===============> Producing diff: %s" msg
         return MessageProduced
         }
 
-    | _ -> Choice2Of2 (new Exception("Panic: This shouldn't have happened"))
+    | _ -> Choice2Of2 (Exception("Panic: This shouldn't have happened"))
+
 
 
 let rec runApp evHandler effHandler state ev =
     match ev with
-    | None ->
-        printfn "Application ended"
+    | Choice2Of2 _ ->
+        state
 
-    | Some(other) ->
+    | Choice1Of2 other ->
         let (newState, eff) = evHandler state other
-        let next            = effHandler newState eff |> toOption
-        Thread.Sleep 10
+        let next            = effHandler newState eff
         runApp evHandler effHandler newState next
+
+
+let rec loopApp evHandler effHandler state =
+    let newState = runApp evHandler effHandler state ( Choice1Of2 AppStarted )
+    "Waiting..............\n" |> Seq.iter (fun c -> printf "%c" c; Thread.Sleep 100)
+    loopApp evHandler effHandler newState
+
 
 
 
@@ -98,9 +128,9 @@ let main argv =
         |> Async.RunSynchronously
 
     let initialState =
-        { BinLogFile    = "/home/nick/.mysql-binlogs/binlog";
+        { BinLogFile    = "/var/lib/mysql/mysql-bin.000009";
           OldLog        = "";
           KafkaProducer = producer; }
 
-    runApp eventHandler effectHandler initialState ( Some AppStarted )
+    loopApp eventHandler effectHandler initialState
     0
