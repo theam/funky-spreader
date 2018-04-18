@@ -12,19 +12,19 @@ open Parser
 
 type State =
     { BinLogFile    : string;
-      OldLog        : string;
+      OldLog        : string list;
       KafkaProducer : Producer; }
 
 
 type Effect =
     | ReadBinLog of string
-    | PublishLog of string
+    | PublishLog of string list
     | NoOp
 
 
 type Event =
     | AppStarted
-    | BinLogRead of string
+    | BinLogRead of string list
     | MessageProduced
 
 
@@ -34,11 +34,10 @@ let diffChars (equals : seq<char>, differents : seq<char>) (x : char) (y : char)
     else (equals, (Seq.singleton y) |> Seq.append differents )
 
 
-let diffLogs ( oldLog : string ) ( newLog : string ) =
-    let oL                   = oldLog.PadRight(newLog.Length) |> Seq.map char
-    let nL                   = newLog.PadRight(oldLog.Length) |> Seq.map char
-    let (equals, differents) = Seq.fold2 diffChars ("" |> Seq.map char, "" |> Seq.map char) oL nL
-    differents |> Seq.map string |> String.concat ""
+let diffLogs ( oldLog : string list ) ( newLog : string list) : string list =
+    newLog
+    |> Seq.skip oldLog.Length
+    |> Seq.toList
 
 
 let eventHandler state ev =
@@ -48,12 +47,12 @@ let eventHandler state ev =
 
     | BinLogRead(newLog) ->
         let diff = diffLogs state.OldLog newLog
-        if diff.Trim() = ""
+        if diff.Length = 0
         then
             printfn "Diff is empty"
             (state, NoOp)
         else
-            let newState = { state with OldLog = diff }
+            let newState = { state with OldLog = newLog }
             (newState, PublishLog(diff))
 
     | MessageProduced ->
@@ -79,15 +78,16 @@ let effectHandler state ev =
         match BinLog.parse content with
         | Failure(s, err, _) ->
             printfn "Parse error: %s" (err.ToString())
-            return (BinLogRead "")
+            return (BinLogRead [""])
         | Success(res, _, _) ->
-            return (BinLogRead (res.ToString()))
+            return (BinLogRead res)
         }
 
-    | PublishLog(msg) -> choose {
-        let kafkaMessage = ProducerMessage.ofString (msg)
+    | PublishLog(msgs) -> choose {
+        // let kafkaMessage = ProducerMessage.ofString (msg)
         // Producer.produce state.KafkaProducer kafkaMessage |> ignore
-        printfn "===============> Producing diff: %s" msg
+        msgs
+        |> Seq.iter (printfn "===============> Producing diff: %s")
         return MessageProduced
         }
 
@@ -129,7 +129,7 @@ let main argv =
 
     let initialState =
         { BinLogFile    = "/var/lib/mysql/mysql-bin.000009";
-          OldLog        = "";
+          OldLog        = [""];
           KafkaProducer = producer; }
 
     loopApp eventHandler effectHandler initialState
