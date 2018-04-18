@@ -26,13 +26,13 @@ type Event =
 
 let diffChars (equals : seq<char>, differents : seq<char>) (x : char) (y : char) : (seq<char> * seq<char>) =
     if x = y
-    then (equals |> Seq.append (Seq.singleton x), differents)
-    else (equals, differents |> Seq.append (Seq.singleton y))
+    then ((Seq.singleton x)|> Seq.append equals , differents)
+    else (equals, (Seq.singleton y) |> Seq.append differents )
 
 
-let diffLogs oldLog newLog =
-    let oL                   = oldLog |> Seq.map char
-    let nL                   = newLog |> Seq.map char
+let diffLogs ( oldLog : string ) ( newLog : string ) =
+    let oL                   = oldLog.PadRight(newLog.Length) |> Seq.map char
+    let nL                   = newLog.PadRight(oldLog.Length) |> Seq.map char
     let (equals, differents) = Seq.fold2 diffChars ("" |> Seq.map char, "" |> Seq.map char) oL nL
     differents |> Seq.map string |> String.concat ""
 
@@ -45,8 +45,10 @@ let eventHandler state ev =
     | BinLogRead(newLog) ->
         let diff = diffLogs state.OldLog newLog
         if diff = ""
-        then (state, NoOp)
-        else ({ state with OldLog = diff }, PublishLog(diff))
+        then
+            (state, NoOp)
+        else
+            ({ state with OldLog = diff }, PublishLog(diff))
 
     | MessageProduced ->
         (state, NoOp)
@@ -89,8 +91,7 @@ let main argv =
     let producerConfig =
         ProducerConfig.create (
             topic = "spreader",
-            partition = Partitioner.roundRobin,
-            requiredAcks = RequiredAcks.Local )
+            partition = Partitioner.roundRobin)
 
     let producer =
         Producer.createAsync connection producerConfig
@@ -100,5 +101,6 @@ let main argv =
         { BinLogFile    = "/home/nick/.mysql-binlogs/binlog";
           OldLog        = "";
           KafkaProducer = producer; }
+
     runApp eventHandler effectHandler initialState ( Some AppStarted )
     0
