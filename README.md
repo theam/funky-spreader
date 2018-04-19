@@ -28,4 +28,17 @@ demo with `sudo`.
 2. Run `dotnet run -- /path/to/the/latest/binlog/file`
 
 
+## Development
+
+The parsing of the `mysqlbinlog` (that is, the output of the command)
+was done using `FParsec`, which is an implementation of monadic parser
+combinators.
+
+Sending messages to Kafka was done using Jet's `Kafunk`.
+
+The main processing was made with managed effects, so most of the code
+remains pure, instead of having `IO` actions everywhere, with the plus
+that the effect handler is completely decoupled from the domain logic,
+allowing us to test this much easily.
+
 
