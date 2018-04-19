@@ -16,7 +16,9 @@ module SpreaderProducer =
 
 
     let produce producer msg =
-        // let kafkaMessage = ProducerMessage.ofString (msg)
-        // Producer.produce producer kafkaMessage |> ignore
-        printfn "===============> Producing diff: %s" msg
+        let kafkaMessage = ProducerMessage.ofString (msg)
+        let res =
+            Producer.produce producer kafkaMessage
+            |> Async.RunSynchronously
+        printfn "Published message: %s | Partition: %i | Offset %i" msg res.partition res.offset
 
