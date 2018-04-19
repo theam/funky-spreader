@@ -90,10 +90,15 @@ let rec loopApp evHandler effHandler state =
 
 [<EntryPoint>]
 let main argv =
-    let initialState =
-        { BinLogFile    = "/var/lib/mysql/mysql-bin.000009";
-          OldLog        = [""];
-          KafkaProducer = SpreaderProducer.create; }
+    if argv.Length < 1
+    then
+        printfn "You must provide the binary log file as the first argument"
+        1
+    else
+        let initialState =
+            { BinLogFile    = argv.[0];
+              OldLog        = [""];
+              KafkaProducer = SpreaderProducer.create; }
 
-    loopApp eventHandler effectHandler initialState
-    0
+        loopApp eventHandler effectHandler initialState
+        0
