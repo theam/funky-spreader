@@ -1,6 +1,8 @@
 # funky-spreader
 _Spread MySQL events to Kafka, in a func-y way_
 
+![caution demo](https://img.shields.io/badge/caution-demo-red.svg)
+
 
 ## Requirements
 
